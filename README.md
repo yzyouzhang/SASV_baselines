@@ -14,42 +14,11 @@ Please send an email to `shimhz6.6@gmail.com` for questions related to this adap
 ### Activate a conda environment
 - Not mandatory, but we recommend to initialize a conda envionment and match the development environment. This is because Deep Neural Network (DNN) models' results are not deterministic when trained multiple times. Here is the environment we used.
 ```bash
-conda create --name {asvspoof5_sasv2}
+conda create --name {wildspoof_sasv}
 conda install -y conda "python=${3.9.19}"
 conda install pytorch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 pytorch-cuda=12.1 -c pytorch -c nvidia\n
 ```
 - Afterward, install the packages via `pip install -r requirements.txt`.
-
-### Setting the corpus
-1. Download `release.zip` by registering to the ASVspoof 5 challenge phase 2.
-2. Add a symlink of your folder to this directory using below command.
-  - `ln -s /path/of/your/uncompressed/release.zip corpus`
-
-If you did it correctly, when you run `cd corpus; tree tree -I "*flac" ./`
-```bash
-./
-|-- ASVspoof5.dev.enroll.txt
-|-- ASVspoof5.dev.metadata.txt
-|-- ASVspoof5.dev.trial.txt
-|-- ASVspoof5.train.metadata.txt
-|-- flac_D (derived using `tar -xvf flac_D.tar`)
-|-- flac_D.tar
-|   |--  D_0000000001.flac
-|   |--  D_0000000002.flac
-|   `--  D_...........flac
-|-- flac_T ((derived using `tar -xvf flac_T.tar`))
-|   |--  T_0000000001.flac
-|   |--  T_0000000002.flac
-|   `--  T_...........flac
-|-- flac_T.tar
-|-- LICENSE.txt
-`-- README.txt
-```
-
-### Data format
-- For the train set, we will use `/metadata/train.csv` in our dataset. 
-  - We will adopt a multitask learning where a DNN is trained to classify both (i) closed set speaker identification (multi-class classification) and (ii) anti-spoofing detection (bonafide/spoof binary classification)
-
 
 ## Models
 This adaptation employs [SKA-TDNN](https://ieeexplore.ieee.org/iel7/10022052/10022330/10023305.pdf). You can also select other models implemented in the main branch (or your own model) using the `--model` option:
@@ -103,32 +72,43 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
 ### Metric
 We use the [Agnostic Detection Cost Function (a-DCF)](https://arxiv.org/abs/2403.01355) as the main metric, the primary metric used in the challenge to rank the submissions.
 
-## Citation
-If you utilize this repository, please cite the following papers,
+## Reference
 
 ```bibtex
+
+@article{jung2025spoofceleb,
+  title={SpoofCeleb: Speech deepfake detection and SASV in the wild},
+  author={Jung, Jee-weon and Wu, Yihan and Wang, Xin and Kim, Ji-Hoon and Maiti, Soumi and Matsunaga, Yuta and Shim, Hye-jin and Tian, Jinchuan and Evans, Nicholas and Chung, Joon Son and others},
+  journal={IEEE Open Journal of Signal Processing},
+  year={2025},
+  publisher={IEEE}
+}
+
+@article{jung2024text,
+  title={The Text-to-speech in the Wild (TITW) Database},
+  author={Jung, Jee-weon and Zhang, Wangyou and Maiti, Soumi and Wu, Yihan and Wang, Xin and Kim, Ji-Hoon and Matsunaga, Yuta and Um, Seyun and Tian, Jinchuan and Shim, Hye-jin and others},
+  journal={ISCA Interspeech 2025},
+  year={2024}
+}
+
 @inproceedings{mun2022frequency,
   title={Frequency and Multi-Scale Selective Kernel Attention for Speaker Verification},
   author={Mun, Sung Hwan and Jung, Jee-weon and Han, Min Hyun and Kim, Nam Soo},
   booktitle={Proc. IEEE SLT},
   year={2022}
 }
+
 @inproceedings{mun2023towards
   title={Towards single integrated spoofing-aware speaker verification embeddings},
   author={Mun, Sung Hwan and Shim, Hye-jin and Tak, Hemlata and Wang, Xin and Liu, Xuechen and Sahidullah, Md and Jeong, Myeonghun and Han, Min Hyun and Todisco, Massimiliano and Lee, Kong Aik and others},
   booktitle={Proc. Interspeech},
   year={2023}
 }
+
 @inproceedings{shim2024an
   title={a-DCF: an architecture agnostic metric with application to spoofing-robust speaker verification},
   author={Shim, Hye-jin and Jung, Jee-weon and Kinnunen, Tomi and Evans, Nicholas and Bonastre, Jean-Francois and Lapidot, Itshak},
   booktitle={Proc. Speaker Odyssey},
   year={2024}
-}
-@techreport{delgado2024asvspoof,
-  title={ASVspoof 5 Evaluation Plan},
-  author={Delgado, H{\'e}ctor and Evans, Nicholas and Jung, Jee-weon and Kinnunen, Tomi and Kukanov, Ivan and Lee, Kong Aik and Liu, Xuechen and Shim, Hye-jin and Sahidullah, Md and Tak, Hemlata and others},
-  year={2024},
-  url={https://www.asvspoof.org/file/ASVspoof5___Evaluation_Plan_Phase2.pdf},
 }
 ```
