@@ -27,7 +27,7 @@ This adaptation employs [SKA-TDNN](https://ieeexplore.ieee.org/iel7/10022052/100
 - **SKA_TDNN**: Selective Kernel Attention TDNN (default)
 - **ECAPA_TDNN**: Emphasized Channel Attention, Propagation and Aggregation TDNN
 - **MFA_Conformer**: Multi-scale Feature Aggregation Conformer
-- **ReDimNet**: Reshape Dimensions Network ([Interspeech 2024](https://github.com/IDRnD/redimnet))
+- **ReDimNet**: Reshape Dimensions Network ([Interspeech 2024](https://github.com/yzyouzhang/redimnet))
 
 ### ReDimNet Options:
 ReDimNet offers multiple model variants with different computational complexities:
@@ -44,8 +44,11 @@ To use ReDimNet, add the following arguments:
 --redimnet_model b2 \
 --redimnet_train_type ptn \
 --redimnet_dataset vox2 \
---redimnet_pretrained True
+--redimnet_pretrained True \
+--redimnet_repo yzyouzhang/redimnet
 ```
+
+**Note**: By default, ReDimNet loads from `yzyouzhang/redimnet` (fork). You can use the original repository by setting `--redimnet_repo IDRnD/ReDimNet`.
 
 ## Training
 
@@ -112,7 +115,8 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --redimnet_model b2 \
   --redimnet_train_type ptn \
   --redimnet_dataset vox2 \
-  --redimnet_pretrained True
+  --redimnet_pretrained True \
+  --redimnet_repo yzyouzhang/redimnet
 ```
 
 ## Evaluation
@@ -141,6 +145,7 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
         --redimnet_model b2 \
         --redimnet_train_type ptn \
         --redimnet_dataset vox2 \
+        --redimnet_repo yzyouzhang/redimnet \
         --initial_model /path/to/your_model/pretrained_weight.model
 ```
 

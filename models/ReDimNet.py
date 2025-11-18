@@ -3,7 +3,8 @@
 """
 ReDimNet wrapper for SASV baseline
 ReDimNet: Reshape Dimensions Network for Speaker Recognition (Interspeech 2024)
-Repository: https://github.com/IDRnD/redimnet
+Official Repository: https://github.com/IDRnD/redimnet
+Fork: https://github.com/yzyouzhang/redimnet
 """
 
 import torch
@@ -24,6 +25,7 @@ class ReDimNetWrapper(nn.Module):
         dataset: Dataset used for pretraining ('vox2', 'vb2', 'vb2+vox2+cnc')
         num_out: Expected output embedding dimension (default 192)
         pretrained: Whether to load pretrained weights
+        repo_source: GitHub repository source ('IDRnD/ReDimNet' or 'yzyouzhang/redimnet')
     """
     def __init__(
         self,
@@ -32,6 +34,7 @@ class ReDimNetWrapper(nn.Module):
         dataset: str = 'vox2',
         num_out: int = 192,
         pretrained: bool = True,
+        repo_source: str = 'yzyouzhang/redimnet',
         **kwargs
     ):
         super(ReDimNetWrapper, self).__init__()
@@ -40,14 +43,16 @@ class ReDimNetWrapper(nn.Module):
         self.train_type = train_type
         self.dataset = dataset
         self.num_out = num_out
+        self.repo_source = repo_source
 
-        print(f"Loading ReDimNet model: {model_name}, train_type: {train_type}, dataset: {dataset}")
+        print(f"Loading ReDimNet from {repo_source}")
+        print(f"  Model: {model_name}, train_type: {train_type}, dataset: {dataset}")
 
         # Load ReDimNet from torch.hub
         try:
             if pretrained:
                 self.redimnet = torch.hub.load(
-                    'IDRnD/ReDimNet',
+                    repo_source,
                     'ReDimNet',
                     model_name=model_name,
                     train_type=train_type,
@@ -57,25 +62,43 @@ class ReDimNetWrapper(nn.Module):
             else:
                 # Load architecture without pretrained weights
                 self.redimnet = torch.hub.load(
-                    'IDRnD/ReDimNet',
+                    repo_source,
                     'ReDimNet',
                     model_name=model_name,
                     train_type=None,  # No pretrained weights
                     dataset=None,
                     trust_repo=True
                 )
-            print(f"Successfully loaded ReDimNet-{model_name}")
+            print(f"Successfully loaded ReDimNet-{model_name} from {repo_source}")
         except Exception as e:
-            print(f"Error loading ReDimNet from torch.hub: {e}")
+            print(f"Error loading ReDimNet from {repo_source}: {e}")
             print("Attempting to load without trust_repo flag...")
             # Fallback without trust_repo
-            self.redimnet = torch.hub.load(
-                'IDRnD/ReDimNet',
-                'ReDimNet',
-                model_name=model_name,
-                train_type=train_type if pretrained else None,
-                dataset=dataset if pretrained else None
-            )
+            try:
+                self.redimnet = torch.hub.load(
+                    repo_source,
+                    'ReDimNet',
+                    model_name=model_name,
+                    train_type=train_type if pretrained else None,
+                    dataset=dataset if pretrained else None
+                )
+                print(f"Successfully loaded ReDimNet-{model_name}")
+            except Exception as e2:
+                print(f"Failed with both methods. Error: {e2}")
+                # Try fallback to original repo if using fork
+                if repo_source != 'IDRnD/ReDimNet':
+                    print(f"Attempting fallback to original IDRnD/ReDimNet repository...")
+                    self.redimnet = torch.hub.load(
+                        'IDRnD/ReDimNet',
+                        'ReDimNet',
+                        model_name=model_name,
+                        train_type=train_type if pretrained else None,
+                        dataset=dataset if pretrained else None,
+                        trust_repo=True
+                    )
+                    print(f"Successfully loaded from fallback repository")
+                else:
+                    raise e2
 
         # Check if output dimension needs adjustment
         # ReDimNet outputs 192-dim embeddings by default
@@ -118,6 +141,7 @@ def MainModel(
     redimnet_train_type: str = 'ptn',
     redimnet_dataset: str = 'vox2',
     redimnet_pretrained: bool = True,
+    redimnet_repo: str = 'yzyouzhang/redimnet',
     num_out: int = 192,
     **kwargs
 ):
@@ -135,6 +159,7 @@ def MainModel(
         redimnet_train_type: Training type ('ptn', 'ft_lm', 'ft_mix')
         redimnet_dataset: Dataset ('vox2', 'vb2', 'vb2+vox2+cnc')
         redimnet_pretrained: Whether to load pretrained weights
+        redimnet_repo: Repository source ('yzyouzhang/redimnet' or 'IDRnD/ReDimNet')
         num_out: Output embedding dimension
         **kwargs: Additional arguments (for compatibility)
 
@@ -147,6 +172,7 @@ def MainModel(
         dataset=redimnet_dataset,
         num_out=num_out,
         pretrained=redimnet_pretrained,
+        repo_source=redimnet_repo,
         **kwargs
     )
     return model
