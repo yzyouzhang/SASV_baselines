@@ -21,11 +21,35 @@ conda install pytorch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 pytorch-cuda=
 - Afterward, install the packages via `pip install -r requirements.txt`.
 
 ## Models
-This adaptation employs [SKA-TDNN](https://ieeexplore.ieee.org/iel7/10022052/10022330/10023305.pdf). You can also select other models implemented in the main branch (or your own model) using the `--model` option:
+This adaptation employs [SKA-TDNN](https://ieeexplore.ieee.org/iel7/10022052/10022330/10023305.pdf) by default. You can select other models using the `--model` option:
+
+### Available Models:
+- **SKA_TDNN**: Selective Kernel Attention TDNN (default)
+- **ECAPA_TDNN**: Emphasized Channel Attention, Propagation and Aggregation TDNN
+- **MFA_Conformer**: Multi-scale Feature Aggregation Conformer
+- **ReDimNet**: Reshape Dimensions Network ([Interspeech 2024](https://github.com/IDRnD/redimnet))
+
+### ReDimNet Options:
+ReDimNet offers multiple model variants with different computational complexities:
+- `b0`: 1.0M params, 0.43 GMACs
+- `b1`: 2.2M params, 0.54 GMACs
+- `b2`: 4.7M params, 0.90 GMACs (recommended)
+- `b3`: 3.0M params, 3.00 GMACs
+- `b5`: 9.2M params, 9.87 GMACs
+- `b6`: 15.0M params, 20.27 GMACs
+
+To use ReDimNet, add the following arguments:
+```bash
+--model ReDimNet \
+--redimnet_model b2 \
+--redimnet_train_type ptn \
+--redimnet_dataset vox2 \
+--redimnet_pretrained True
+```
 
 ## Training
-Train using the command below.
 
+### Training with SKA-TDNN (default)
 ```bash
 CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --max_frames 400 \
@@ -56,8 +80,44 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --model SKA_TDNN
 ```
 
+### Training with ReDimNet
+```bash
+CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+  --max_frames 400 \
+  --num_spk 400 \
+  --num_utt 2 \
+  --batch_size 40 \
+  --trainfunc sasv_e2e_v1 \
+  --optimizer adamW \
+  --scheduler cosine_annealing_warmup_restarts \
+  --lr_t0 8 \
+  --lr_tmul 1.0 \
+  --lr_max 1e-4 \
+  --lr_min 0 \
+  --lr_wstep 0 \
+  --lr_gamma 0.8 \
+  --margin 0.2 \
+  --scale 30 \
+  --num_class 1160 \
+  --save_path exp/sasv_redimnet \
+  --train_list corpus/spoofceleb/metadata/train.csv \
+  --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
+  --train_path corpus/spoofceleb/flac/train \
+  --eval_path corpus/spoofceleb/flac/development \
+  --spk_meta_train spk_meta/spk_meta_trn_spoofceleb.pk \
+  --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
+  --musan_path /path/to/dataset/MUSAN/musan_split \
+  --rir_path /path/to/dataset/RIRS_NOISES/simulated_rirs \
+  --model ReDimNet \
+  --redimnet_model b2 \
+  --redimnet_train_type ptn \
+  --redimnet_dataset vox2 \
+  --redimnet_pretrained True
+```
+
 ## Evaluation
-You can evaluate your checkpoint of a model using:
+
+### Evaluation with SKA-TDNN
 ```bash
 CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
         --eval \
@@ -66,6 +126,21 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
         --eval_list corpus/spoofceleb/protocol/sasv_evaluation_evaluation_protocol.csv \
         --eval_path corpus/spoofceleb/flac/evaluation/ \
         --model SKA_TDNN \
+        --initial_model /path/to/your_model/pretrained_weight.model
+```
+
+### Evaluation with ReDimNet
+```bash
+CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+        --eval \
+        --eval_frames 0 \
+        --num_eval 1 \
+        --eval_list corpus/spoofceleb/protocol/sasv_evaluation_evaluation_protocol.csv \
+        --eval_path corpus/spoofceleb/flac/evaluation/ \
+        --model ReDimNet \
+        --redimnet_model b2 \
+        --redimnet_train_type ptn \
+        --redimnet_dataset vox2 \
         --initial_model /path/to/your_model/pretrained_weight.model
 ```
 
@@ -109,6 +184,14 @@ We use the [Agnostic Detection Cost Function (a-DCF)](https://arxiv.org/abs/2403
   title={a-DCF: an architecture agnostic metric with application to spoofing-robust speaker verification},
   author={Shim, Hye-jin and Jung, Jee-weon and Kinnunen, Tomi and Evans, Nicholas and Bonastre, Jean-Francois and Lapidot, Itshak},
   booktitle={Proc. Speaker Odyssey},
+  year={2024}
+}
+
+@inproceedings{yakovlev2024redimnet,
+  title={Reshape Dimensions Network for Speaker Recognition},
+  author={Yakovlev, Ivan and Avdeeva, Angelina and Emelianov, Anton and Pekhovsky, Timur and Shulipa, Aleksandr and Shibitov, Nikolay and Korshunov, Konstantin and Goncharov, Maxim},
+  booktitle={Proc. Interspeech},
+  pages={2330--2334},
   year={2024}
 }
 ```

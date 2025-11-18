@@ -76,6 +76,12 @@ parser.add_argument('--num_out',        type=int,   default=192,    help='Embedd
 parser.add_argument('--eca_c',          type=int,   default=1024,   help='ECAPA-TDNN channel')
 parser.add_argument('--eca_s',          type=int,   default=8,      help='ECAPA-TDNN model-scale')
 
+## ReDimNet-specific arguments
+parser.add_argument('--redimnet_model',      type=str,   default='b2',    help='ReDimNet model variant: b0, b1, b2, b3, b5, b6')
+parser.add_argument('--redimnet_train_type', type=str,   default='ptn',   help='ReDimNet training type: ptn, ft_lm, ft_mix')
+parser.add_argument('--redimnet_dataset',    type=str,   default='vox2',  help='ReDimNet dataset: vox2, vb2, vb2+vox2+cnc')
+parser.add_argument('--redimnet_pretrained', type=bool,  default=True,    help='Load pretrained ReDimNet weights')
+
 ## Evaluation types
 parser.add_argument('--eval',           dest='eval', action='store_true', help='Eval only')
 parser.add_argument('--scoring',        dest='scoring', action='store_true', help='Scoring')
