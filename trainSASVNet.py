@@ -15,6 +15,17 @@ from metrics import *
 from SASVNet import *
 from DatasetLoader import *
 from tuneThreshold import *
+import numpy as np
+
+# Compatibility shim: older code (or third-party packages) may use deprecated
+# NumPy aliases like `np.float`. Newer NumPy versions removed these aliases
+# which causes AttributeError. Provide safe aliases here so packages such as
+# `a_dcf` continue to work without modifying site-packages.
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'int'):
+    np.int = int
+
 from a_dcf import a_dcf
 
 warnings.filterwarnings("ignore")
@@ -127,11 +138,16 @@ def main_worker(args):
         with open(savescore_file, "w") as tmp_scorefile:
             tmp_scorefile.write("\t-\t")   
             for _s in sc:
-                tmp_scorefile.write(f"s {_s}\n")   
+                # Extract scalar from array if needed
+                score_val = _s[0] if hasattr(_s, '__len__') and len(_s) > 0 else _s
+                tmp_scorefile.write(f"s {score_val}\n")   
 
         msg = f"Complete scoring. save at " + savescore_file
         cur_time = time.strftime("%Y-%m-%d %H:%M:%S")
         print('\n', cur_time, msg)
+        scorefile.write(cur_time + " " + msg + "\n")
+        scorefile.flush()
+        scorefile.close()
         return
     ## Evaluation only
     if args.eval == True:
@@ -140,18 +156,25 @@ def main_worker(args):
 
         with open("tmp_scorefile", "w") as tmp_scorefile:
             for _s, _l in zip(sc, lab):
-                tmp_scorefile.write(f"s t {_s} {_l}\n")
+                # Extract scalar from array if needed
+                score_val = _s[0] if hasattr(_s, '__len__') and len(_s) > 0 else _s
+                tmp_scorefile.write(f"s t {score_val} {_l}\n")
 
         metric = a_dcf.calculate_a_dcf("tmp_scorefile")
         os.remove("tmp_scorefile")
 
-        msg = f"a-DCF {metric['min_a_dcf_thresh']:2.4f}, threshold: {metric['min_a_dcf_thresh']:2.4f}"
+        msg = f"a-DCF {metric['min_a_dcf']:2.4f}, threshold: {metric['min_a_dcf_thresh']:2.4f}"
         cur_time = time.strftime("%Y-%m-%d %H:%M:%S")
         print('\n', cur_time, msg)
+        
+        # Write to both metrics and scores.txt files
         with open(args.result_save_path + "/metrics", "a") as f_res:
             f_res.write(cur_time + "\n")
-            f_res.write(msg)
-
+            f_res.write(msg + "\n")
+        
+        scorefile.write(cur_time + " " + msg + "\n")
+        scorefile.flush()
+        scorefile.close()
 
         return
 
