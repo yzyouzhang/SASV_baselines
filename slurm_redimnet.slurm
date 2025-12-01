@@ -10,7 +10,7 @@
 #SBATCH --partition=gpuA100x4
 #SBATCH --account=bfdc-delta-gpu
 #SBATCH --job-name=spoofceleb
-#SBATCH --time=6:59:59
+#SBATCH --time=3:59:59
 
 # Per-task logs
 #SBATCH -e slurm_outputs/slurm-%A_%a.err
@@ -87,7 +87,25 @@ conda activate wildspoof_sasv
 #   --batch_size 40 \
 #   --num_thread 8
 
-# Evaluate with SAMO scoring (if using samo_sasv loss)
+# # Evaluate with SAMO scoring on validation set (debug mode)
+# CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+#   --eval \
+#   --debug \
+#   --initial_model exp/sasv_redimnet/model/model000000008.model \
+#   --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
+#   --eval_path corpus/spoofceleb/flac/development \
+#   --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
+#   --save_path exp/sasv_samo_eval \
+#   --model ReDimNet \
+#   --redimnet_model b2 \
+#   --trainfunc samo_sasv \
+#   --num_class 1160 \
+#   --batch_size 40 \
+#   --num_thread 8 \
+#   --use_samo_scoring \
+#   --use_enroll
+
+# Evaluate with SAMO scoring on validation set
 CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --eval \
   --initial_model exp/sasv_redimnet/model/model000000008.model \
@@ -105,42 +123,37 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --use_enroll
 
 # # ========================================
-# # Score on WildSpoof test set
+# # Score on WildSpoof test set with SAMO
 # # ========================================
 
-# # Step 1: Prepare test protocol (convert TSV to CSV format)
-# # This creates a CSV file with enrollment and test file pairs
+# # Step 1: Prepare test protocol (convert TSV to CSV format with speaker IDs)
+# # This creates a CSV file: enroll_file,test_file,speaker_id,utt_id
 # python prepare_test_protocol.py \
 #   --enroll_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_enroll.tsv \
 #   --test_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.tsv \
-#   --output_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv \
-#   --use_first_enroll
+#   --output_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv
 
-# # Step 2: Generate scores on test set
-# # Note: No speaker metadata needed for scoring mode
+# # Step 2: Generate scores on test set with SAMO scoring
+# # The --use_enroll flag will build enrollment dict from multiple enrollment files per speaker
+# # The --use_samo_scoring flag will use SAMO inference instead of cosine similarity
 # CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
 #   --scoring \
+#   --debug \
 #   --initial_model exp/sasv_redimnet/model/model000000008.model \
 #   --eval_list /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv \
 #   --eval_path /work/hdd/bfdc/yzyouzhang/spoofceleb_test/data_v2.0 \
-#   --save_path exp/sasv_redimnet_test \
+#   --save_path exp/sasv_samo_test_debug \
 #   --model ReDimNet \
 #   --redimnet_model b2 \
+#   --trainfunc samo_sasv \
 #   --num_class 1160 \
 #   --batch_size 1 \
-#   --num_thread 8
-
-# # Step 3: Format scores for submission
-# # The output will be in exp/sasv_redimnet_test/result/*_scorefile
-# # You may need to post-process to match submission format:
-# # SPK_ID UTT_ID SCORE
-# python format_submission.py \
-#   --score_file exp/sasv_redimnet_test/result/1_scorefile \
-#   --test_protocol /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.tsv \
-#   --output_file exp/sasv_redimnet_test/submission.tsv \
-#   --aggregate_enrollments
+#   --num_thread 8 \
+#   --use_samo_scoring \
+#   --use_enroll
 
 # echo "=========================================="
-# echo "Scoring complete!"
-# echo "Submission file: exp/sasv_redimnet_test/submission.tsv"
+# echo "SAMO scoring complete!"
+# echo "Submission file: exp/sasv_samo_test/result/1_scorefile"
+# echo "Format: speaker_id TAB utt_id TAB score"
 # echo "=========================================="

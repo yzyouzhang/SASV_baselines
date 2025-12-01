@@ -32,13 +32,18 @@ def main():
                     # Use all enrollment files (will create multiple trials)
                     enroll_dict[spk_id] = enroll_files
     
-    # Read test protocol and create CSV
+    # Read test protocol and create CSV with speaker and utterance IDs
     with open(args.test_file, 'r') as f_in, open(args.output_file, 'w') as f_out:
         for line in f_in:
             parts = line.strip().split()
             if len(parts) == 2:
                 spk_id = parts[0]
                 test_file = parts[1]
+                
+                # Extract utterance ID (filename without extension)
+                utt_id = test_file.split('/')[-1] if '/' in test_file else test_file
+                if utt_id.endswith('.flac'):
+                    utt_id = utt_id[:-5]
                 
                 # Add .flac extension if not present
                 if not test_file.endswith('.flac'):
@@ -48,11 +53,12 @@ def main():
                     enroll_files = enroll_dict[spk_id]
                     if isinstance(enroll_files, str):
                         # Single enrollment file
-                        f_out.write(f"{enroll_files},{test_file}\n")
+                        # Format: enroll_file,test_file,speaker_id,utt_id
+                        f_out.write(f"{enroll_files},{test_file},{spk_id},{utt_id}\n")
                     else:
                         # Multiple enrollment files - create trial for each
                         for enroll_file in enroll_files:
-                            f_out.write(f"{enroll_file},{test_file}\n")
+                            f_out.write(f"{enroll_file},{test_file},{spk_id},{utt_id}\n")
                 else:
                     print(f"Warning: Speaker {spk_id} not found in enrollment file")
     

@@ -8,3 +8,4 @@ venv/
 exp/
 slurm-*.out
 slurm_outputs/
+tmp_scorefile

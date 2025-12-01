@@ -57,7 +57,7 @@ class ModelTrainer(object):
         self.ngpu = 1
         self.ndistfactor = int(kwargs.get('num_utt') * self.ngpu)
         
-    def build_enrollment_dict(self, train_list, train_path, num_thread, eval_frames=0, num_eval=1, **kwargs):
+    def build_enrollment_dict(self, train_list, train_path, num_thread, eval_frames=0, num_eval=1, debug=False, **kwargs):
         """
         Build enrollment dictionary by averaging bonafide embeddings per speaker.
         This should be called after loading a pre-trained model.
@@ -68,12 +68,43 @@ class ModelTrainer(object):
             num_thread: Number of data loader threads
             eval_frames: Number of frames for evaluation (0 = full file)
             num_eval: Number of segments per utterance
+            debug: If True, only process speakers from first 5 trials
             
         Returns:
             enroll_dict: Dictionary mapping speaker_id (int) to enrollment embedding (torch.Tensor)
         """
         print("\nBuilding enrollment dictionary from bonafide utterances...")
         self.__model__.eval()
+        
+        # In debug mode, first determine which speakers are needed
+        debug_speakers = set()
+        if debug:
+            print("Debug mode: determining required speakers from first 5 trials...")
+            with open(train_list) as f:
+                lines = f.readlines()
+            
+            trial_count = 0
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split(',')
+                if len(parts) < 3:
+                    continue
+                
+                # Extract speaker ID from enrollment file path or CSV column
+                enroll_file = parts[0]
+                if len(parts) >= 4:  # Test protocol format with speaker_id column
+                    speaker_id = parts[2]
+                else:  # Extract from path
+                    speaker_id = enroll_file.split('/')[1] if '/' in enroll_file else enroll_file.split('_')[0]
+                
+                debug_speakers.add(speaker_id)
+                trial_count += 1
+                if trial_count >= 5:
+                    break
+            
+            print(f"Debug mode: will build enrollment dict for {len(debug_speakers)} speakers: {sorted(debug_speakers)}")
         
         # Parse training list to get bonafide utterances per speaker
         speaker_files = {}  # {speaker_id: [list of audio files]}
@@ -90,6 +121,10 @@ class ModelTrainer(object):
                 continue
             
             audio_file, speaker_id, label = parts[0], parts[1], parts[2]
+            
+            # In debug mode, skip speakers not in the debug set
+            if debug and speaker_id not in debug_speakers:
+                continue
             
             # Only use bonafide samples (label == speaker_id)
             if label == speaker_id:
@@ -210,6 +245,35 @@ class ModelTrainer(object):
         
         if not lines_eval:
             raise ValueError(f"Evaluation list file is empty: {eval_list}")
+        
+        # Debug mode: sample trials 
+        debug_mode = kwargs.get('debug', False)
+        if debug_mode:
+            # Check if protocol has labels (validation) or not (test)
+            first_line_parts = lines_eval[0].strip().split(',')
+            has_labels = len(first_line_parts) >= 3 and first_line_parts[2] in ['target', 'nontarget', 'spoof']
+            
+            if has_labels:
+                # Validation protocol: sample by label to get balanced set
+                debug_lines = []
+                label_lines = {'target': [], 'nontarget': [], 'spoof': []}
+                for line in lines_eval:
+                    parts = line.strip().split(',')
+                    if len(parts) >= 3:
+                        label = parts[2]
+                        if label in label_lines:
+                            label_lines[label].append(line)
+                
+                # Sample 3 from each category
+                for label, lines_list in label_lines.items():
+                    debug_lines.extend(lines_list[:3])
+                
+                lines_eval = debug_lines
+                print(f"\n[DEBUG MODE] Limited to {len(lines_eval)} trials (3 target + 3 nontarget + 3 spoof)")
+            else:
+                # Test protocol: just take first N trials
+                lines_eval = lines_eval[:10]
+                print(f"\n[DEBUG MODE] Limited to {len(lines_eval)} trials")
             
         files = []
         for line in lines_eval:
@@ -266,34 +330,72 @@ class ModelTrainer(object):
 
                 # Choose scoring method based on configuration
                 use_samo_scoring = kwargs.get('use_samo_scoring', False)
+                debug_mode = kwargs.get('debug', False)
+                
                 if use_samo_scoring and hasattr(self.__model__.module.__L__, 'inference'):
-                    # Extract speaker ID from enrollment file for SAMO scoring
-                    enroll_path = data[0]
+                    # Extract speaker ID for SAMO scoring
+                    # Prefer speaker ID from CSV (column 2) if available, otherwise extract from path
                     speaker_id = None
-                    if '/' in enroll_path:
-                        speaker_str = enroll_path.split('/')[1]  # e.g., "id10349"
-                        # Try to map speaker string to numeric ID if speaker_id_map exists
-                        # For now, we'll extract numeric part or use hash
-                        # This assumes speaker IDs are in format "id10349" -> 10349
+                    if len(data) >= 4:
+                        # CSV has speaker_id in column 2 (test set format)
+                        speaker_str = data[2]
+                    else:
+                        # Extract from enrollment path (validation format)
+                        enroll_path = data[0]
+                        if '/' in enroll_path:
+                            speaker_str = enroll_path.split('/')[1]  # e.g., "id10349"
+                        else:
+                            speaker_str = None
+                    
+                    # Convert speaker string to numeric ID
+                    if speaker_str:
                         try:
-                            speaker_id = int(speaker_str.replace('id', ''))
+                            # Try to extract numeric part (e.g., "id10349" -> 10349 or "spk001" -> 1)
+                            speaker_id = int(''.join(filter(str.isdigit, speaker_str)))
                         except:
-                            speaker_id = None
+                            # If no digits, use the string itself if it's already numeric
+                            try:
+                                speaker_id = int(speaker_str)
+                            except:
+                                speaker_id = None
+                    
+                    if debug_mode:
+                        print(f"\n[DEBUG] Trial {idx+1}: SAMO scoring")
+                        print(f"  Enroll: {data[0][:60]}...")
+                        print(f"  Test: {data[1][:60]}...")
+                        print(f"  Speaker: {speaker_str} -> numeric_id={speaker_id}")
+                        print(f"  Enroll embed norm: {enr.norm():.4f}")
+                        print(f"  Test embed norm: {tst.norm():.4f}")
                     
                     score = self.__model__.module.__L__.inference(enr, tst, enroll_speaker=speaker_id)
                     score = torch.tensor([score])  # Convert to tensor for consistency
+                    
+                    if debug_mode:
+                        print(f"  SAMO score: {score.item():.6f}")
                 else:
                     # Default: cosine similarity
                     score = F.cosine_similarity(enr, tst)
+                    
+                    if debug_mode:
+                        print(f"\n[DEBUG] Trial {idx+1}: Cosine similarity")
+                        print(f"  Enroll: {data[0][:60]}...")
+                        print(f"  Test: {data[1][:60]}...")
+                        print(f"  Score: {score.item():.6f}")
 
                 all_scores.append(score.detach().cpu().numpy())
                 
-                # Extract speaker ID from enrollment file path (e.g., "a00/id10349/..." -> "id10349")
-                # Extract test utterance filename without extension
-                enroll_path = data[0]
-                test_path = data[1]
-                speaker_id = enroll_path.split('/')[1] if '/' in enroll_path else enroll_path.split('_')[0]
-                test_utt = os.path.splitext(os.path.basename(test_path))[0]
+                # Extract speaker ID and utterance ID
+                # If CSV has 4 columns: enroll_file,test_file,speaker_id,utt_id
+                # Otherwise extract from file paths
+                if len(data) >= 4:
+                    speaker_id = data[2]
+                    test_utt = data[3]
+                else:
+                    # Fallback: extract from file paths
+                    enroll_path = data[0]
+                    test_path = data[1]
+                    speaker_id = enroll_path.split('/')[1] if '/' in enroll_path else enroll_path.split('_')[0]
+                    test_utt = os.path.splitext(os.path.basename(test_path))[0]
                 
                 all_trials.append(f"{speaker_id}\t{test_utt}")  # Tab-separated for submission format
                 

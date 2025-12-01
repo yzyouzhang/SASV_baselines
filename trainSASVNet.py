@@ -101,6 +101,7 @@ parser.add_argument('--redimnet_repo',       type=str,   default='yzyouzhang/red
 parser.add_argument('--eval',           dest='eval', action='store_true', help='Eval only')
 parser.add_argument('--scoring',        dest='scoring', action='store_true', help='Scoring')
 parser.add_argument('--enroll_list',      type=str,   default="corpus/ASVspoof5.dev.enroll.txt",     help='Evaluation enroll list')
+parser.add_argument('--debug',          dest='debug', action='store_true', help='Debug mode: process only first 5 speakers/trials with verbose output')
 
 args = parser.parse_args()
 
@@ -142,37 +143,106 @@ def main_worker(args):
             print("="*50 + "\n")
         else:
             print("\n" + "="*50)
-            print("Building enrollment dictionary from evaluation set...")
-            print("(Training and evaluation speakers are disjoint)")
+            print("Building enrollment dictionary from evaluation/test set...")
             print("="*50)
             
-            # Build enrollment dict from evaluation/validation bonafide samples
-            # Parse eval protocol to extract bonafide enrollment files
+            # Build enrollment dict from enrollment files in protocol
+            # Parse eval protocol to extract enrollment files per speaker
             import csv
             from collections import defaultdict
             
             eval_bonafide_files = defaultdict(list)
+            protocol_format = None  # 'validation' or 'test'
+            
+            # In debug mode, first pass to determine speakers from first 5 trials
+            debug_speakers = None
+            if args.debug:
+                print("[DEBUG MODE] Determining speakers from first 5 trials...")
+                debug_speakers = set()
+                trial_count = 0
+                with open(args.eval_list, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        parts = line.split(',')
+                        if len(parts) < 3:
+                            continue
+                        
+                        # Detect format and extract speaker ID
+                        if len(parts) >= 4:  # Test format
+                            speaker_id = parts[2]
+                        else:  # Validation format
+                            enroll_file = parts[0]
+                            if '/' in enroll_file:
+                                speaker_id = enroll_file.split('/')[1]
+                            else:
+                                continue
+                        
+                        debug_speakers.add(speaker_id)
+                        trial_count += 1
+                        if trial_count >= 5:
+                            break
+                
+                debug_speakers = sorted(debug_speakers)
+                print(f"[DEBUG MODE] Will only process {len(debug_speakers)} speakers: {debug_speakers}")
+            
             with open(args.eval_list, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if not line or line.startswith('#'):
                         continue
                     parts = line.split(',')
-                    if len(parts) >= 3:
+                    
+                    # Detect format:
+                    # Validation: enroll_file,test_file,label (3 columns)
+                    # Test: enroll_file,test_file,speaker_id,utt_id (4 columns)
+                    if protocol_format is None:
+                        protocol_format = 'test' if len(parts) >= 4 else 'validation'
+                        print(f"Detected protocol format: {protocol_format}")
+                    
+                    if protocol_format == 'validation' and len(parts) >= 3:
                         enroll_file = parts[0]
                         label = parts[2]
                         # Only use bonafide (target) enrollments
                         if label == 'target':
                             if '/' in enroll_file:
                                 speaker_id = enroll_file.split('/')[1]
+                                # Skip if debug mode and speaker not in debug set
+                                if debug_speakers is not None and speaker_id not in debug_speakers:
+                                    continue
                                 eval_bonafide_files[speaker_id].append(enroll_file)
+                    elif protocol_format == 'test' and len(parts) >= 4:
+                        enroll_file = parts[0]
+                        speaker_id = parts[2]  # Speaker ID from protocol
+                        # Skip if debug mode and speaker not in debug set
+                        if debug_speakers is not None and speaker_id not in debug_speakers:
+                            continue
+                        eval_bonafide_files[speaker_id].append(enroll_file)
             
-            # Get unique bonafide files
+            # Get unique bonafide files per speaker
             all_bonafide = []
             for spk, files in eval_bonafide_files.items():
-                all_bonafide.extend(list(set(files)))
+                unique_files = list(set(files))
+                eval_bonafide_files[spk] = unique_files  # Store unique files
+                all_bonafide.extend(unique_files)
             
-            print(f"Found {len(all_bonafide)} unique bonafide enrollment files from {len(eval_bonafide_files)} speakers")
+            print(f"Found {len(all_bonafide)} unique enrollment files from {len(eval_bonafide_files)} speakers")
+            
+            # Show enrollment files per speaker statistics
+            enroll_counts = [len(files) for files in eval_bonafide_files.values()]
+            print(f"Enrollment files per speaker: min={min(enroll_counts)}, max={max(enroll_counts)}, avg={sum(enroll_counts)/len(enroll_counts):.1f}")
+            
+            # Debug mode: show detailed per-speaker info
+            if args.debug:
+                print("\n[DEBUG] Enrollment files per speaker:")
+                for spk in sorted(eval_bonafide_files.keys()):
+                    files = eval_bonafide_files[spk]
+                    print(f"  {spk}: {len(files)} files")
+                    for f in files[:3]:  # Show first 3 files
+                        print(f"    - {f}")
+                    if len(files) > 3:
+                        print(f"    ... and {len(files)-3} more")
             
             # Extract embeddings for bonafide files
             from DatasetLoader import test_dataset_loader
@@ -195,9 +265,13 @@ def main_worker(args):
                     embed = s(inp).detach().cpu()
                 embeddings[data[1][0]] = embed
                 
+                if args.debug and idx < 10:
+                    print(f"\n[DEBUG] Embedding {idx+1}: file={data[1][0]}, shape={embed.shape}, norm={embed.norm():.4f}")
+                
                 telapsed = time.time() - tstart
-                sys.stdout.write(f"\r Extracting embeddings: {idx+1}/{len(all_bonafide)} - {(idx+1)/telapsed:.2f} Hz      ")
-                sys.stdout.flush()
+                if not args.debug or idx % 10 == 0:
+                    sys.stdout.write(f"\r Extracting embeddings: {idx+1}/{len(all_bonafide)} - {(idx+1)/telapsed:.2f} Hz      ")
+                    sys.stdout.flush()
             
             print("\nAveraging embeddings per speaker...")
             
@@ -225,6 +299,9 @@ def main_worker(args):
                     
                     enroll_dict[numeric_id] = avg_embed
                     speaker_id_map[speaker_str] = numeric_id
+                    
+                    if args.debug:
+                        print(f"[DEBUG] Speaker {speaker_str} (numeric_id={numeric_id}): averaged {len(speaker_embeds)} embeddings, final norm={avg_embed.norm():.4f}")
             
             # Update the loss function with enrollment dictionary
             s.module.__L__.enroll_dict = enroll_dict
