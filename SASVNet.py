@@ -18,8 +18,8 @@ class WrappedModel(nn.Module):
         super(WrappedModel, self).__init__()
         self.module = model
 
-    def forward(self, x, label=None):
-        return self.module(x, label)
+    def forward(self, x, label=None, target_speaker=None):
+        return self.module(x, label, target_speaker=target_speaker)
 
 
 class SASVNet(nn.Module):
@@ -192,7 +192,7 @@ class ModelTrainer(object):
         
         return enroll_dict, speaker_id_map
 
-    def train_network(self, loader, epoch):
+    def train_network(self, loader, epoch, debug=False):
         self.__model__.train()
         self.__scheduler__.step(epoch-1)
 
@@ -201,7 +201,11 @@ class ModelTrainer(object):
         cnt, idx, loss, top1 = 0, 0, 0, 0
         tstart = time.time()
 
-        for data, data_label, target_speaker in loader:
+        for batch_idx, (data, data_label, target_speaker) in enumerate(loader):
+            # Debug mode: limit to first 10 batches
+            if debug and batch_idx >= 10:
+                print(f"\n[DEBUG MODE] Stopping after {batch_idx} batches")
+                break
 
             self.__model__.zero_grad()
             data = data.transpose(1,0)
@@ -223,8 +227,17 @@ class ModelTrainer(object):
             telapsed = time.time() - tstart
             tstart = time.time()
 
-            sys.stdout.write("\rProcessing {:d} of {:d}: Loss {:f}, ACC {:2.3f}%, LR {:.8f} - {:.2f} Hz  ".format(idx*df, loader.__len__()*bs*df, loss/cnt, top1/cnt, lr, bs*df/telapsed))
-            sys.stdout.flush()
+            # Debug mode: show more detailed info
+            if debug and batch_idx < 5:
+                print(f"\n[DEBUG] Batch {batch_idx+1}:")
+                print(f"  Data shape: {data.shape}")
+                print(f"  Labels (speakers): {label.tolist()}")
+                print(f"  Target speakers: {target_spk.tolist()}")
+                print(f"  Loss: {nloss.item():.4f}, Acc: {prec1.item():.2f}%")
+            
+            if not debug or batch_idx % 5 == 0:
+                sys.stdout.write("\rProcessing {:d} of {:d}: Loss {:f}, ACC {:2.3f}%, LR {:.8f} - {:.2f} Hz  ".format(idx*df, loader.__len__()*bs*df, loss/cnt, top1/cnt, lr, bs*df/telapsed))
+                sys.stdout.flush()
 
         return (loss/cnt, top1/cnt, lr)
 

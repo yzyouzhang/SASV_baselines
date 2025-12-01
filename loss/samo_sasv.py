@@ -104,17 +104,23 @@ class SAMO_revised(nn.Module):
             tmp_w_lst = []
             for id in spk:
                 if id in enroll:
-                    tmp_w_lst.append(enroll[id].clone())
+                    # Convert enrolled embedding to match x dtype (for mixed precision)
+                    enrolled_emb = enroll[id].clone().to(dtype=x.dtype, device=x.device)
+                    tmp_w_lst.append(enrolled_emb)
                 else:
-                    tmp_w_lst.append(torch.zeros(self.feat_dim, device=x.device))
-            tmp_w = torch.stack(tmp_w_lst)  # [B, D]
-            tmp_w = F.normalize(tmp_w, p=2, dim=1).to(x.device)
-            speaker_scores = (x * tmp_w).sum(dim=1, keepdim=True)  # [B, 1]
+                    tmp_w_lst.append(torch.zeros(self.feat_dim, device=x.device, dtype=x.dtype))
+            
+            if tmp_w_lst:
+                tmp_w = torch.stack(tmp_w_lst)  # [B, D]
+                tmp_w = F.normalize(tmp_w, p=2, dim=1)
+                speaker_scores = (x * tmp_w).sum(dim=1, keepdim=True)  # [B, 1]
 
-            # Only override bonafide samples with speaker scores
-            # Spoofs always use max_cos
-            if (labels == 1).any():
-                loss_scores[labels == 1] = speaker_scores[labels == 1]
+                # Only override bonafide samples with speaker scores
+                # Spoofs always use max_cos
+                if (labels == 1).any():
+                    # Ensure speaker_scores matches loss_scores dtype
+                    speaker_scores = speaker_scores.to(dtype=loss_scores.dtype)
+                    loss_scores[labels == 1] = speaker_scores[labels == 1]
 
         # Apply margins for OC-Softmax loss
         loss_scores[labels == 1] = self.m_real - loss_scores[labels == 1]   # bonafide

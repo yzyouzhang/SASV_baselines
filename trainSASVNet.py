@@ -66,6 +66,8 @@ parser.add_argument('--num_class',      type=int,   default=41,     help='Number
 parser.add_argument('--build_enroll',   dest='build_enroll', action='store_true', help='Build enrollment dictionary for SAMO loss from bonafide samples')
 parser.add_argument('--use_enroll',     dest='use_enroll', action='store_true', help='Use enrollment dictionary with SAMO loss (requires pre-trained model)')
 parser.add_argument('--use_samo_scoring', dest='use_samo_scoring', action='store_true', help='Use SAMO inference scoring instead of cosine similarity')
+parser.add_argument('--freeze_samo_centers', dest='freeze_samo_centers', action='store_true', help='Freeze SAMO centers during training (only update embeddings)')
+parser.add_argument('--build_train_attractors', dest='build_train_attractors', action='store_true', help='Build speaker attractors from training set for SAMO fine-tuning')
 
 ## Load and save
 parser.add_argument('--initial_model',  type=str,   default="",     help='Initial model weights')
@@ -133,75 +135,132 @@ def main_worker(args):
         print("Model {} loaded from previous state!".format(modelfiles[-1]))
         it = int(os.path.splitext(os.path.basename(modelfiles[-1]))[0][5:]) + 1
 
-    ## Build enrollment dictionary if using SAMO with speaker attractors
-    if args.use_enroll and args.trainfunc in ["samo_sasv"]:
-        if not args.eval_list or not args.eval_path:
+    ## Build enrollment dictionary/speaker attractors for SAMO
+    if (args.use_enroll or args.build_train_attractors) and args.trainfunc in ["samo_sasv"]:
+        # Determine which dataset to use for building attractors
+        if args.build_train_attractors:
+            # Use training set for fine-tuning
+            attractor_list = args.train_list
+            attractor_path = args.train_path
             print("\n" + "="*50)
-            print("WARNING: --use_enroll requires --eval_list and --eval_path")
-            print("Skipping enrollment dictionary building.")
+            print("Building speaker attractors from TRAINING set...")
+            print("This is for SAMO fine-tuning mode.")
+            print("="*50)
+        elif args.use_enroll:
+            # Use eval set for evaluation
+            attractor_list = args.eval_list
+            attractor_path = args.eval_path
+            print("\n" + "="*50)
+            print("Building enrollment dictionary from EVALUATION set...")
+            print("This is for SAMO evaluation mode.")
+            print("="*50)
+        
+        if not attractor_list or not attractor_path:
+            print("\n" + "="*50)
+            print("WARNING: Missing list or path for attractor building")
+            print("Skipping attractor dictionary building.")
             print("The model will use SAMO without speaker-aware attractors.")
             print("="*50 + "\n")
         else:
-            print("\n" + "="*50)
-            print("Building enrollment dictionary from evaluation/test set...")
-            print("="*50)
-            
-            # Build enrollment dict from enrollment files in protocol
-            # Parse eval protocol to extract enrollment files per speaker
+            # Build attractor dict from bonafide files in training/eval data
             import csv
             from collections import defaultdict
             
             eval_bonafide_files = defaultdict(list)
-            protocol_format = None  # 'validation' or 'test'
             
-            # In debug mode, first pass to determine speakers from first 5 trials
+            # Detect format by checking first line
+            with open(attractor_list, 'r') as f:
+                first_line = f.readline().strip()
+                parts = first_line.split(',')
+            
+            # Determine format:
+            # Training format: file,speaker,attack (3 columns, header or data)
+            # Validation format: enroll_file,test_file,label (3 columns)
+            # Test format: enroll_file,test_file,speaker_id,utt_id (4+ columns)
+            
+            if parts[0] in ['file', 'audio_file']:
+                # Training CSV with header
+                protocol_format = 'training'
+                print("Detected protocol format: training CSV")
+            elif len(parts) >= 4:
+                protocol_format = 'test'
+                print("Detected protocol format: test")
+            else:
+                # Check if it looks like training data (file path, speaker ID, attack type)
+                # vs validation data (enrollment file, test file, label)
+                if '/' in parts[0] and parts[1].startswith('id') and (parts[2].startswith('a') or len(parts[2]) <= 3):
+                    protocol_format = 'training'
+                    print("Detected protocol format: training CSV")
+                else:
+                    protocol_format = 'validation'
+                    print("Detected protocol format: validation")
+            
+            # In debug mode, determine speakers to process
             debug_speakers = None
             if args.debug:
-                print("[DEBUG MODE] Determining speakers from first 5 trials...")
+                print("[DEBUG MODE] Determining speakers from first 100 lines of attractor list...")
                 debug_speakers = set()
-                trial_count = 0
-                with open(args.eval_list, 'r') as f:
+                line_count = 0
+                with open(attractor_list, 'r') as f:
                     for line in f:
                         line = line.strip()
-                        if not line or line.startswith('#'):
+                        if not line or line.startswith('#') or line.startswith('file'):
                             continue
                         parts = line.split(',')
-                        if len(parts) < 3:
+                        if len(parts) < 2:
                             continue
                         
-                        # Detect format and extract speaker ID
-                        if len(parts) >= 4:  # Test format
-                            speaker_id = parts[2]
-                        else:  # Validation format
-                            enroll_file = parts[0]
-                            if '/' in enroll_file:
-                                speaker_id = enroll_file.split('/')[1]
+                        # Extract speaker ID based on format
+                        if protocol_format == 'training':
+                            speaker_id = parts[1]  # speaker column
+                            attack = parts[2] if len(parts) > 2 else ''
+                            # Only bonafide samples (a00)
+                            if attack == 'a00':
+                                debug_speakers.add(speaker_id)
+                        else:
+                            # For validation/test format
+                            if len(parts) >= 4:
+                                speaker_id = parts[2]
                             else:
-                                continue
+                                enroll_file = parts[0]
+                                if '/' in enroll_file:
+                                    speaker_id = enroll_file.split('/')[1]
+                                else:
+                                    continue
+                            debug_speakers.add(speaker_id)
                         
-                        debug_speakers.add(speaker_id)
-                        trial_count += 1
-                        if trial_count >= 5:
+                        line_count += 1
+                        if line_count >= 100:
                             break
                 
-                debug_speakers = sorted(debug_speakers)
+                debug_speakers = sorted(list(debug_speakers))[:5]
                 print(f"[DEBUG MODE] Will only process {len(debug_speakers)} speakers: {debug_speakers}")
             
-            with open(args.eval_list, 'r') as f:
+            # Parse the file to extract bonafide files per speaker
+            with open(attractor_list, 'r') as f:
                 for line in f:
                     line = line.strip()
-                    if not line or line.startswith('#'):
+                    if not line or line.startswith('#') or line.startswith('file'):
                         continue
                     parts = line.split(',')
+                    if len(parts) < 2:
+                        continue
                     
-                    # Detect format:
-                    # Validation: enroll_file,test_file,label (3 columns)
-                    # Test: enroll_file,test_file,speaker_id,utt_id (4 columns)
-                    if protocol_format is None:
-                        protocol_format = 'test' if len(parts) >= 4 else 'validation'
-                        print(f"Detected protocol format: {protocol_format}")
+                    # Handle different formats
+                    if protocol_format == 'training':
+                        # Training format: file,speaker,attack
+                        audio_file = parts[0]
+                        speaker_id = parts[1]
+                        attack = parts[2] if len(parts) > 2 else ''
+                        
+                        # Only use bonafide samples (a00)
+                        if attack == 'a00':
+                            # Skip if debug mode and speaker not in debug set
+                            if debug_speakers is not None and speaker_id not in debug_speakers:
+                                continue
+                            eval_bonafide_files[speaker_id].append(audio_file)
                     
-                    if protocol_format == 'validation' and len(parts) >= 3:
+                    elif protocol_format == 'validation' and len(parts) >= 3:
                         enroll_file = parts[0]
                         label = parts[2]
                         # Only use bonafide (target) enrollments
@@ -248,7 +307,7 @@ def main_worker(args):
             from DatasetLoader import test_dataset_loader
             import torch.nn.functional as F
             
-            test_dataset = test_dataset_loader(all_bonafide, args.eval_path, eval_frames=0, num_eval=1, 
+            test_dataset = test_dataset_loader(all_bonafide, attractor_path, eval_frames=0, num_eval=1, 
                                               num_mels=args.num_mels, log_input=args.log_input)
             test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, 
                                                      num_workers=args.num_thread, drop_last=False)
@@ -308,6 +367,20 @@ def main_worker(args):
             s.module.__L__.use_speaker_attractor = True
             print(f"Enrollment dictionary built with {len(enroll_dict)} speakers")
             print(f"Enrollment embedding dimension: {list(enroll_dict.values())[0].shape}")
+            
+            # Freeze SAMO centers if requested (for fine-tuning mode)
+            if args.freeze_samo_centers:
+                print("Freezing SAMO centers (only embeddings will be updated)...")
+                if hasattr(s.module.__L__, 'samo'):
+                    # Freeze SAMO centers
+                    if hasattr(s.module.__L__.samo, 'center'):
+                        s.module.__L__.samo.center.requires_grad = False
+                        print(f"  SAMO centers frozen: shape {s.module.__L__.samo.center.shape}")
+                    # Also freeze AAM-Softmax weights if desired
+                    # if hasattr(s.module.__L__.aamsoftmax, 'weight'):
+                    #     s.module.__L__.aamsoftmax.weight.requires_grad = False
+                    #     print(f"  AAM-Softmax weights frozen: shape {s.module.__L__.aamsoftmax.weight.shape}")
+            
             print("="*50 + "\n")
 
     ## Scoring only
@@ -401,7 +474,7 @@ def main_worker(args):
 
         ## Training
         train_sampler.set_epoch(it)
-        loss, traineer, lr = trainer.train_network(train_loader, it)
+        loss, traineer, lr = trainer.train_network(train_loader, it, debug=args.debug)
         print('')
 
         ## Evaluating
@@ -434,6 +507,12 @@ def main_worker(args):
             scorefile.flush()
             trainer.saveParameters(args.model_save_path+"/model%09d.model"%it)
             print('')
+        
+        # Debug mode: stop after first epoch with evaluation
+        if args.debug:
+            print("\n[DEBUG MODE] Completed 1 epoch with validation")
+            print("Remove --debug flag to run full training")
+            break
 
     scorefile.close()
 
