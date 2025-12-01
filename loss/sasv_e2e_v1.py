@@ -15,7 +15,7 @@ class LossFunction(nn.Module):
         self.num_class = kwargs.get('num_class')
         print('Initialized SASV End-to-end v1 Loss Function')
 
-    def forward(self, x, label=None):
+    def forward(self, x, label=None, target_speaker=None):
         assert x.size()[1] == 2
         nlossS, prec = self.aamsoftmax(x.reshape(-1, x.size()[-1]), label.repeat_interleave(2))
         

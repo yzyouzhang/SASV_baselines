@@ -24,7 +24,11 @@ def loadWAV(filename, max_frames, evalmode=True, num_eval=1):
     max_audio = max_frames * 160
 
     # Read wav file and convert to torch tensor
-    audio, sample_rate = soundfile.read(filename)
+    try:
+        audio, sample_rate = soundfile.read(filename)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load audio file: {filename}. Error: {e}")
+    
     audiosize = audio.shape[0]
     if audiosize <= max_audio:
         shortage = max_audio - audiosize + 1
@@ -122,6 +126,7 @@ class train_dataset_loader(Dataset):
         self.data_list = []
 
         self.data_label = []
+        self.data_target_speaker = []  # Target speaker ID (for spoofed samples)
         self.data_group = [] # 'speaker_type' (e.g., 'LA0039_A01')
 
         for idx, line in enumerate(lines):
@@ -131,8 +136,10 @@ class train_dataset_loader(Dataset):
 
             if data[2] == 'a00':
                 self.data_label += [dictkeys[data[1]]]
+                self.data_target_speaker += [dictkeys[data[1]]]  # Same as label for bona-fide
             else:
                 self.data_label += [dictkeys['spoof']]
+                self.data_target_speaker += [dictkeys[data[1]]]  # Target speaker being spoofed
 
             self.data_group += [data[1] + '_' + data[2]]
 
@@ -162,7 +169,7 @@ class train_dataset_loader(Dataset):
                         audio = np.expand_dims(audio, 0)
             feat += [audio]
         feat = np.concatenate(feat, axis=0)
-        return torch.FloatTensor(feat), self.data_label[index]
+        return torch.FloatTensor(feat), self.data_label[index], self.data_target_speaker[index]
 
     def __len__(self):
         return len(self.data_list)

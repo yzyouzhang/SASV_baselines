@@ -73,21 +73,36 @@ conda activate wildspoof_sasv
 #   --redimnet_repo yzyouzhang/redimnet
 
 
-# Evaluate on validation/development set
+# # Evaluate on validation/development set
+# CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+#   --eval \
+#   --initial_model exp/sasv_redimnet/model/model000000008.model \
+#   --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
+#   --eval_path corpus/spoofceleb/flac/development \
+#   --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
+#   --save_path exp/sasv_redimnet_eval \
+#   --model ReDimNet \
+#   --redimnet_model b2 \
+#   --num_class 1160 \
+#   --batch_size 40 \
+#   --num_thread 8
+
+# Evaluate with SAMO scoring (if using samo_sasv loss)
 CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
   --eval \
-  --scoring \
   --initial_model exp/sasv_redimnet/model/model000000008.model \
   --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
   --eval_path corpus/spoofceleb/flac/development \
   --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
-  --save_path exp/sasv_redimnet_eval \
+  --save_path exp/sasv_samo_eval \
   --model ReDimNet \
   --redimnet_model b2 \
+  --trainfunc samo_sasv \
   --num_class 1160 \
   --batch_size 40 \
-  --num_thread 8
-
+  --num_thread 8 \
+  --use_samo_scoring \
+  --use_enroll
 
 # # ========================================
 # # Score on WildSpoof test set
@@ -105,7 +120,7 @@ CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
 # # Note: No speaker metadata needed for scoring mode
 # CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
 #   --scoring \
-#   --initial_model exp/sasv_redimnet/model/model000000050.model \
+#   --initial_model exp/sasv_redimnet/model/model000000008.model \
 #   --eval_list /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv \
 #   --eval_path /work/hdd/bfdc/yzyouzhang/spoofceleb_test/data_v2.0 \
 #   --save_path exp/sasv_redimnet_test \

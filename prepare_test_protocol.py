@@ -24,6 +24,8 @@ def main():
             if len(parts) == 2:
                 spk_id = parts[0]
                 enroll_files = parts[1].split(',')
+                # Add .flac extension if not present
+                enroll_files = [f if f.endswith('.flac') else f + '.flac' for f in enroll_files]
                 if args.use_first_enroll:
                     enroll_dict[spk_id] = enroll_files[0]
                 else:
@@ -37,6 +39,10 @@ def main():
             if len(parts) == 2:
                 spk_id = parts[0]
                 test_file = parts[1]
+                
+                # Add .flac extension if not present
+                if not test_file.endswith('.flac'):
+                    test_file = test_file + '.flac'
                 
                 if spk_id in enroll_dict:
                     enroll_files = enroll_dict[spk_id]

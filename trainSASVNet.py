@@ -63,6 +63,9 @@ parser.add_argument('--lr_gamma',       type=float, default=0.8,    help='Cosine
 parser.add_argument('--margin',         type=float, default=0.2,    help='Loss margin, only for some loss functions')
 parser.add_argument('--scale',          type=float, default=30,     help='Loss scale, only for some loss functions')
 parser.add_argument('--num_class',      type=int,   default=41,     help='Number of speakers in the softmax layer, 1159 (speaker-classes) + 1 (spoofing-class)') # 41
+parser.add_argument('--build_enroll',   dest='build_enroll', action='store_true', help='Build enrollment dictionary for SAMO loss from bonafide samples')
+parser.add_argument('--use_enroll',     dest='use_enroll', action='store_true', help='Use enrollment dictionary with SAMO loss (requires pre-trained model)')
+parser.add_argument('--use_samo_scoring', dest='use_samo_scoring', action='store_true', help='Use SAMO inference scoring instead of cosine similarity')
 
 ## Load and save
 parser.add_argument('--initial_model',  type=str,   default="",     help='Initial model weights')
@@ -129,18 +132,120 @@ def main_worker(args):
         print("Model {} loaded from previous state!".format(modelfiles[-1]))
         it = int(os.path.splitext(os.path.basename(modelfiles[-1]))[0][5:]) + 1
 
+    ## Build enrollment dictionary if using SAMO with speaker attractors
+    if args.use_enroll and args.trainfunc in ["samo_sasv"]:
+        if not args.eval_list or not args.eval_path:
+            print("\n" + "="*50)
+            print("WARNING: --use_enroll requires --eval_list and --eval_path")
+            print("Skipping enrollment dictionary building.")
+            print("The model will use SAMO without speaker-aware attractors.")
+            print("="*50 + "\n")
+        else:
+            print("\n" + "="*50)
+            print("Building enrollment dictionary from evaluation set...")
+            print("(Training and evaluation speakers are disjoint)")
+            print("="*50)
+            
+            # Build enrollment dict from evaluation/validation bonafide samples
+            # Parse eval protocol to extract bonafide enrollment files
+            import csv
+            from collections import defaultdict
+            
+            eval_bonafide_files = defaultdict(list)
+            with open(args.eval_list, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(',')
+                    if len(parts) >= 3:
+                        enroll_file = parts[0]
+                        label = parts[2]
+                        # Only use bonafide (target) enrollments
+                        if label == 'target':
+                            if '/' in enroll_file:
+                                speaker_id = enroll_file.split('/')[1]
+                                eval_bonafide_files[speaker_id].append(enroll_file)
+            
+            # Get unique bonafide files
+            all_bonafide = []
+            for spk, files in eval_bonafide_files.items():
+                all_bonafide.extend(list(set(files)))
+            
+            print(f"Found {len(all_bonafide)} unique bonafide enrollment files from {len(eval_bonafide_files)} speakers")
+            
+            # Extract embeddings for bonafide files
+            from DatasetLoader import test_dataset_loader
+            import torch.nn.functional as F
+            
+            test_dataset = test_dataset_loader(all_bonafide, args.eval_path, eval_frames=0, num_eval=1, 
+                                              num_mels=args.num_mels, log_input=args.log_input)
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, 
+                                                     num_workers=args.num_thread, drop_last=False)
+            
+            # Set model to eval mode for embedding extraction
+            s.eval()
+            
+            embeddings = {}
+            import time
+            tstart = time.time()
+            for idx, data in enumerate(test_loader):
+                inp = data[0][0].cuda()
+                with torch.no_grad():
+                    embed = s(inp).detach().cpu()
+                embeddings[data[1][0]] = embed
+                
+                telapsed = time.time() - tstart
+                sys.stdout.write(f"\r Extracting embeddings: {idx+1}/{len(all_bonafide)} - {(idx+1)/telapsed:.2f} Hz      ")
+                sys.stdout.flush()
+            
+            print("\nAveraging embeddings per speaker...")
+            
+            # Average embeddings per speaker and create numeric mapping
+            enroll_dict = {}
+            speaker_id_map = {}
+            unique_speakers = sorted(eval_bonafide_files.keys())
+            
+            for idx, speaker_str in enumerate(unique_speakers):
+                speaker_embeds = []
+                for audio_file in eval_bonafide_files[speaker_str]:
+                    if audio_file in embeddings:
+                        speaker_embeds.append(embeddings[audio_file])
+                
+                if speaker_embeds:
+                    # Average and normalize
+                    avg_embed = torch.stack(speaker_embeds).mean(dim=0).squeeze()
+                    avg_embed = F.normalize(avg_embed.unsqueeze(0), p=2, dim=1).squeeze()
+                    
+                    # Map string speaker ID to numeric (extract number from "id10349" -> 10349)
+                    try:
+                        numeric_id = int(speaker_str.replace('id', ''))
+                    except:
+                        numeric_id = idx
+                    
+                    enroll_dict[numeric_id] = avg_embed
+                    speaker_id_map[speaker_str] = numeric_id
+            
+            # Update the loss function with enrollment dictionary
+            s.module.__L__.enroll_dict = enroll_dict
+            s.module.__L__.use_speaker_attractor = True
+            print(f"Enrollment dictionary built with {len(enroll_dict)} speakers")
+            print(f"Enrollment embedding dimension: {list(enroll_dict.values())[0].shape}")
+            print("="*50 + "\n")
+
     ## Scoring only
     if args.scoring == True:
         print('Test list',args.eval_list)
-        sc = trainer.evaluateFromList(**vars(args))
+        sc, trials = trainer.evaluateFromList(**vars(args))
 
         savescore_file=os.path.join(args.result_save_path,f"{it}_scorefile")
+        
+        # Write submission format: speaker_id \t utterance_id \t score
         with open(savescore_file, "w") as tmp_scorefile:
-            tmp_scorefile.write("\t-\t")   
-            for _s in sc:
+            for _s, _trial in zip(sc, trials):
                 # Extract scalar from array if needed
                 score_val = _s[0] if hasattr(_s, '__len__') and len(_s) > 0 else _s
-                tmp_scorefile.write(f"s {score_val}\n")   
+                tmp_scorefile.write(f"{_trial}\t{score_val}\n")
 
         msg = f"Complete scoring. save at " + savescore_file
         cur_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -152,16 +257,24 @@ def main_worker(args):
     ## Evaluation only
     if args.eval == True:
         print('Test list',args.eval_list)
-        sc, lab = trainer.evaluateFromList(**vars(args))
+        sc, lab, trials = trainer.evaluateFromList(**vars(args))
 
+        # Write tmp_scorefile for a-DCF calculation (fixed format)
         with open("tmp_scorefile", "w") as tmp_scorefile:
             for _s, _l in zip(sc, lab):
                 # Extract scalar from array if needed
                 score_val = _s[0] if hasattr(_s, '__len__') and len(_s) > 0 else _s
                 tmp_scorefile.write(f"s t {score_val} {_l}\n")
+        
+        # Write detailed score file with trial IDs
+        detailed_file = os.path.join(args.result_save_path, f"{it}_eval_scores_detailed")
+        with open(detailed_file, "w") as detail_file:
+            for _s, _l, _trial in zip(sc, lab, trials):
+                score_val = _s[0] if hasattr(_s, '__len__') and len(_s) > 0 else _s
+                detail_file.write(f"{_trial} {score_val} {_l}\n")
 
         metric = a_dcf.calculate_a_dcf("tmp_scorefile")
-        os.remove("tmp_scorefile")
+        # os.remove("tmp_scorefile")
 
         msg = f"a-DCF {metric['min_a_dcf']:2.4f}, threshold: {metric['min_a_dcf_thresh']:2.4f}"
         cur_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -216,11 +329,17 @@ def main_worker(args):
 
         ## Evaluating
         if it % args.test_interval == 0:
-            sc, lab = trainer.evaluateFromList(epoch=it, **vars(args))
+            sc, lab, trials = trainer.evaluateFromList(epoch=it, **vars(args))
 
             with open("tmp_scorefile", "w") as tmp_scorefile:
                 for _s, _l in zip(sc, lab):
                     tmp_scorefile.write(f"s t {_s[0]} {_l}\n")
+            
+            # Write detailed scores for this epoch
+            detailed_file = os.path.join(args.result_save_path, f"epoch{it:03d}_scores_detailed")
+            with open(detailed_file, "w") as detail_file:
+                for _s, _l, _trial in zip(sc, lab, trials):
+                    detail_file.write(f"{_trial} {_s[0]} {_l}\n")
 
             metric = a_dcf.calculate_a_dcf("tmp_scorefile")
             os.remove("tmp_scorefile")
