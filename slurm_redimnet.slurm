@@ -105,40 +105,33 @@ conda activate wildspoof_sasv
 #   --use_samo_scoring \
 #   --use_enroll
 
-# # Evaluate with SAMO scoring on validation set
-# CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
-#   --eval \
-#   --initial_model exp/sasv_samo_finetune2/model/model000000004.model \
-#   --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
-#   --eval_path corpus/spoofceleb/flac/development \
-#   --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
-#   --save_path exp/sasv_samo_eval \
-#   --model ReDimNet \
-#   --redimnet_model b2 \
-#   --trainfunc samo_sasv \
-#   --num_class 1160 \
-#   --batch_size 40 \
-#   --num_thread 8 \
-#   --use_samo_scoring \
-#   --use_enroll
+# Evaluate with SAMO scoring on validation set
+CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+  --eval \
+  --initial_model exp/sasv_samo_finetune2/model/model000000007.model \
+  --eval_list corpus/spoofceleb/protocol/sasv_development_evaluation_protocol.csv \
+  --eval_path corpus/spoofceleb/flac/development \
+  --spk_meta_eval spk_meta/spk_meta_dev_spoofceleb.pk \
+  --save_path exp/sasv_samo_eval \
+  --model ReDimNet \
+  --redimnet_model b2 \
+  --trainfunc samo_sasv \
+  --num_class 1160 \
+  --batch_size 40 \
+  --num_thread 8 \
+  --use_samo_scoring \
+  --use_enroll
 
-# # ========================================
-# # Score on WildSpoof test set with SAMO
-# # ========================================
+# ========================================
+# Score on WildSpoof test set
+# ========================================
 
-# # Step 1: Prepare test protocol (convert TSV to CSV format with speaker IDs)
-# # This creates a CSV file: enroll_file,test_file,speaker_id,utt_id
-# python prepare_test_protocol.py \
-#   --enroll_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_enroll.tsv \
-#   --test_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.tsv \
-#   --output_file /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv
-
-# # Step 2a: Generate scores on test set with original cosine similarity scoring
-# # This will average scores across multiple enrollment files per test utterance
+# # Step 1: Generate scores with cosine similarity (using TSV files directly)
 # CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
 #   --scoring \
 #   --initial_model exp/sasv_redimnet/model/model000000008.model \
-#   --eval_list /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv \
+#   --enroll_tsv /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_enroll.tsv \
+#   --test_tsv /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.tsv \
 #   --eval_path /work/hdd/bfdc/yzyouzhang/spoofceleb_test/data_v2.0 \
 #   --save_path exp/sasv_redimnet_test_final \
 #   --model ReDimNet \
@@ -149,48 +142,48 @@ conda activate wildspoof_sasv
 
 # echo "=========================================="
 # echo "Cosine similarity scoring complete!"
-# echo "Scores file: exp/sasv_redimnet_test_final/result/scores.txt"
-# echo "Submission file: exp/sasv_redimnet_test_final/result/1_scorefile"
+# echo "Scores file: exp/sasv_redimnet_test_final/result/1_scorefile"
 # echo "Format: speaker_id TAB utt_id TAB score"
 # echo "=========================================="
 
-# Step 2b: Generate scores on test set with SAMO scoring
-# The --use_enroll flag will build enrollment dict from multiple enrollment files per speaker
-# The --use_samo_scoring flag will use SAMO inference instead of cosine similarity
-CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
-  --scoring \
-  --initial_model exp/sasv_samo_finetune2/model/model000000004.model \
-  --eval_list /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.csv \
-  --eval_path /work/hdd/bfdc/yzyouzhang/spoofceleb_test/data_v2.0 \
-  --save_path exp/sasv_samo_test_final2_finetune \
-  --model ReDimNet \
-  --redimnet_model b2 \
-  --trainfunc samo_sasv \
-  --num_class 1160 \
-  --batch_size 1 \
-  --num_thread 8 \
-  --use_samo_scoring \
-  --use_enroll
+# # Step 2: Generate scores with SAMO (using TSV files directly)
+# # The system will:
+# # 1. Build speaker-level enrollment embeddings (averaged from enrollment TSV)
+# # 2. Compare each test file with its speaker's enrollment embedding
+# # 3. Use SAMO inference if --use_samo_scoring is set
+# CUDA_VISIBLE_DEVICES=0 python trainSASVNet.py \
+#   --scoring \
+#   --initial_model exp/sasv_redimnet/model/model000000008.model \
+#   --enroll_tsv /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_enroll.tsv \
+#   --test_tsv /work/hdd/bfdc/yzyouzhang/spoofceleb_test/protocol_test.tsv \
+#   --eval_path /work/hdd/bfdc/yzyouzhang/spoofceleb_test/data_v2.0 \
+#   --save_path exp/sasv_samo_test_final2_finetune_newo \
+#   --model ReDimNet \
+#   --redimnet_model b2 \
+#   --trainfunc samo_sasv \
+#   --num_class 1160 \
+#   --batch_size 1 \
+#   --num_thread 8 \
+#   --use_samo_scoring 
 
 # echo "=========================================="
 # echo "SAMO scoring complete!"
-# echo "Scores file: exp/sasv_samo_test_final/result/scores.txt"
-# echo "Submission file: exp/sasv_samo_test_final/result/1_scorefile"
+# echo "Scores file: exp/sasv_samo_test_final2_finetune/result/1_scorefile"
 # echo "Format: speaker_id TAB utt_id TAB score"
 # echo "=========================================="
 
-# # Step 3: Analyze and optionally merge the two scoring methods
+# # Step 4: Analyze and optionally merge the two scoring methods
 # echo ""
 # echo "To analyze and compare the two scoring methods:"
 # echo "python analyze_scores.py \\"
-# echo "  --score1 exp/sasv_redimnet_test_final/result/scores.txt \\"
-# echo "  --score2 exp/sasv_samo_test_final/result/scores.txt \\"
+# echo "  --score1 exp/sasv_redimnet_test_final/result/1_scorefile \\"
+# echo "  --score2 exp/sasv_samo_test_final2_finetune/result/1_scorefile \\"
 # echo "  --name1 'Cosine' --name2 'SAMO'"
 # echo ""
 # echo "To merge the scores with equal weights:"
 # echo "python analyze_scores.py \\"
-# echo "  --score1 exp/sasv_redimnet_test_final/result/scores.txt \\"
-# echo "  --score2 exp/sasv_samo_test_final/result/scores.txt \\"
+# echo "  --score1 exp/sasv_redimnet_test_final/result/1_scorefile \\"
+# echo "  --score2 exp/sasv_samo_test_final2_finetune/result/1_scorefile \\"
 # echo "  --merge --output merged_scores.txt \\"
 # echo "  --name1 'Cosine' --name2 'SAMO'"
 # echo "=========================================="

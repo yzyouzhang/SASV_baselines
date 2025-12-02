@@ -469,6 +469,188 @@ class ModelTrainer(object):
         else:
             return (all_scores, all_labels, all_trials)
 
+    def evaluateFromTSV(self, enroll_tsv, test_tsv, eval_path, num_thread, eval_frames=0, num_eval=1, **kwargs):
+        """
+        Evaluate from TSV protocol files (for scoring mode).
+        This builds speaker-level enrollment embeddings and compares them with test utterances.
+        
+        Args:
+            enroll_tsv: Path to enrollment TSV (format: speaker_id enroll_file1,enroll_file2,...)
+            test_tsv: Path to test TSV (format: speaker_id test_file)
+            eval_path: Base path to audio files
+            num_thread: Number of data loader threads
+            eval_frames: Number of frames for evaluation (0 = full file)
+            num_eval: Number of segments per utterance
+        
+        Returns:
+            (scores, trials) tuple where trials are formatted as "speaker_id\tutt_id"
+        """
+        rank = 0
+        self.__model__.eval()
+        
+        tstart = time.time()
+        
+        # Step 1: Load enrollment protocol
+        print("\n" + "="*70)
+        print("Loading enrollment protocol from TSV...")
+        speaker_enrollments = {}  # {speaker_id: [enroll_file1, enroll_file2, ...]}
+        
+        with open(enroll_tsv, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                
+                speaker_id = parts[0]
+                enroll_files = parts[1].split(',')
+                # Add .flac extension if not present
+                enroll_files = [f if f.endswith('.flac') else f + '.flac' for f in enroll_files]
+                speaker_enrollments[speaker_id] = enroll_files
+        
+        print(f"Loaded enrollment data for {len(speaker_enrollments)} speakers")
+        
+        # Step 2: Load test protocol
+        print("Loading test protocol from TSV...")
+        test_trials = []  # [(speaker_id, test_file), ...]
+        
+        with open(test_tsv, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                
+                speaker_id = parts[0]
+                test_file = parts[1]
+                # Add .flac extension if not present
+                if not test_file.endswith('.flac'):
+                    test_file = test_file + '.flac'
+                
+                if speaker_id in speaker_enrollments:
+                    test_trials.append((speaker_id, test_file))
+                else:
+                    print(f"Warning: Speaker {speaker_id} not found in enrollment data")
+        
+        print(f"Loaded {len(test_trials)} test trials")
+        print("="*70 + "\n")
+        
+        # Step 3: Collect all unique files (enrollments + test files)
+        all_files = set()
+        for enroll_files in speaker_enrollments.values():
+            all_files.update(enroll_files)
+        for _, test_file in test_trials:
+            all_files.add(test_file)
+        
+        all_files = sorted(list(all_files))
+        
+        # Step 4: Extract embeddings for all files
+        from DatasetLoader import test_dataset_loader
+        test_dataset = test_dataset_loader(all_files, eval_path, eval_frames=eval_frames, num_eval=num_eval, **kwargs)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, 
+                                                   num_workers=num_thread, drop_last=False, sampler=None)
+        
+        embeddings = {}
+        if rank == 0:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"[{current_time}] Extracting embeddings for {len(all_files)} files...")
+        
+        for idx, data in enumerate(test_loader):
+            inp1 = data[0][0].cuda()
+            with torch.no_grad():
+                ref_embed = self.__model__(inp1).detach().cpu()
+            embeddings[data[1][0]] = ref_embed
+            
+            telapsed = time.time() - tstart
+            if rank == 0:
+                sys.stdout.write("\r Reading {:d} of {:d}: {:.2f} Hz, embedding size {:d}      ".format(
+                    idx+1, len(all_files), (idx+1)/telapsed, ref_embed.size()[1]))
+                sys.stdout.flush()
+        
+        if rank == 0:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"\n[{current_time}] Finished extracting embeddings")
+        
+        # Step 5: Build speaker-level enrollment embeddings (average across enrollment files)
+        print("\nBuilding speaker-level enrollment embeddings...")
+        speaker_embeds = {}
+        
+        for speaker_id, enroll_files in speaker_enrollments.items():
+            enroll_embeds = []
+            for enroll_file in enroll_files:
+                if enroll_file in embeddings:
+                    enroll_embeds.append(embeddings[enroll_file])
+            
+            if enroll_embeds:
+                # Average enrollment embeddings
+                avg_embed = torch.stack(enroll_embeds).mean(dim=0).squeeze()
+                speaker_embeds[speaker_id] = avg_embed
+        
+        print(f"Built enrollment embeddings for {len(speaker_embeds)} speakers")
+        
+        # Step 6: Compute scores for each test trial
+        print("\nComputing scores...")
+        all_scores = []
+        all_trials = []
+        
+        use_samo_scoring = kwargs.get('use_samo_scoring', False)
+        
+        if use_samo_scoring:
+            print("Using SAMO scoring")
+        else:
+            print("Using cosine similarity scoring")
+        
+        for idx, (speaker_id, test_file) in enumerate(test_trials):
+            # Get speaker enrollment embedding
+            if speaker_id not in speaker_embeds:
+                continue
+            
+            enr = speaker_embeds[speaker_id].cuda()
+            tst = embeddings[test_file].cuda()
+            
+            # Normalize if needed
+            if self.__model__.module.__L__.test_normalize:
+                enr = F.normalize(enr.unsqueeze(0), p=2, dim=1).squeeze()
+                tst = F.normalize(tst, p=2, dim=1)
+            else:
+                enr = enr.unsqueeze(0)
+            
+            # Compute score
+            if use_samo_scoring and hasattr(self.__model__.module.__L__, 'inference'):
+                # Extract numeric speaker ID for SAMO
+                try:
+                    numeric_id = int(''.join(filter(str.isdigit, speaker_id)))
+                except:
+                    numeric_id = None
+                
+                score = self.__model__.module.__L__.inference(enr, tst, enroll_speaker=numeric_id)
+                score = torch.tensor([score])
+            else:
+                # Cosine similarity
+                score = F.cosine_similarity(enr, tst)
+            
+            # Extract utterance ID from test file
+            test_utt_id = os.path.basename(test_file)
+            if test_utt_id.endswith('.flac'):
+                test_utt_id = test_utt_id[:-5]
+            
+            all_scores.append(score.detach().cpu().numpy())
+            all_trials.append(f"{speaker_id}\t{test_utt_id}")
+            
+            if (idx + 1) % 1000 == 0:
+                sys.stdout.write(f"\r Computed {idx+1}/{len(test_trials)} scores      ")
+                sys.stdout.flush()
+        
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        print(f"\n[{current_time}] Finished computing {len(all_scores)} scores")
+        
+        return all_scores, all_trials
+
+
     def saveParameters(self, path):
         torch.save(self.__model__.module.state_dict(), path)
 

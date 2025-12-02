@@ -83,6 +83,10 @@ parser.add_argument('--spk_meta_eval',  type=str,   default="",     help='')
 parser.add_argument('--musan_path',     type=str,   default="",     help='Absolute path to the test set')
 parser.add_argument('--rir_path',       type=str,   default="",     help='Absolute path to the test set')
 
+## TSV protocol files for scoring mode
+parser.add_argument('--enroll_tsv',     type=str,   default="",     help='Enrollment TSV file (format: speaker_id enroll_file1,enroll_file2,...)')
+parser.add_argument('--test_tsv',       type=str,   default="",     help='Test TSV file (format: speaker_id test_file)')
+
 ## Model definition
 parser.add_argument('--num_mels',       type=int,   default=80,     help='Number of mel filterbanks')
 parser.add_argument('--log_input',      type=bool,  default=True,   help='Log input features')
@@ -385,8 +389,15 @@ def main_worker(args):
 
     ## Scoring only
     if args.scoring == True:
-        print('Test list',args.eval_list)
-        sc, trials = trainer.evaluateFromList(**vars(args))
+        # Check if using TSV format (new method) or CSV format (existing method)
+        if args.enroll_tsv and args.test_tsv:
+            print('Enrollment TSV:', args.enroll_tsv)
+            print('Test TSV:', args.test_tsv)
+            sc, trials = trainer.evaluateFromTSV(**vars(args))
+        else:
+            # Use existing CSV-based evaluation
+            print('Test list', args.eval_list)
+            sc, trials = trainer.evaluateFromList(**vars(args))
 
         savescore_file=os.path.join(args.result_save_path,f"{it}_scorefile")
         
