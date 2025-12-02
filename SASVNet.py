@@ -309,6 +309,10 @@ class ModelTrainer(object):
         gs = self.ngpu
 
         embeds_tst = {}
+        if rank == 0:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"[{current_time}] Starting to read embeddings for {ds*gs} files...")
+        
         for idx, data in enumerate(test_loader):
             inp1 = data[0][0].cuda()
             with torch.no_grad():
@@ -319,12 +323,30 @@ class ModelTrainer(object):
             if rank == 0:
                 sys.stdout.write("\r Reading {:d} of {:d}: {:.2f} Hz, embedding size {:d}      ".format(idx*gs, ds*gs, idx*gs/telapsed, ref_embed.size()[1]))
                 sys.stdout.flush()
+        
+        if rank == 0:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"\n[{current_time}] Finished reading embeddings. Total time: {telapsed:.2f}s")
 
         ## Compute verification scores ##
         all_scores, all_labels, all_trials = [], [], []
         if rank == 0:
             tstart = time.time()
-            print('')
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"[{current_time}] Starting to compute scores for {len(lines_eval)} trials...")
+
+            # Choose scoring method based on configuration
+            use_samo_scoring = kwargs.get('use_samo_scoring', False)
+            debug_mode = kwargs.get('debug', False)
+            
+            # For SAMO scoring: track unique speaker+test pairs (skip duplicate enrollments)
+            # For cosine similarity: accumulate scores per test utterance to average them
+            from collections import defaultdict
+            if use_samo_scoring:
+                processed_trials = set()  # Track unique (speaker_id, test_utt) pairs
+            else:
+                trial_scores = defaultdict(list)  # Key: (speaker_id, test_utt), Value: list of scores
+                trial_labels = {}  # Key: (speaker_id, test_utt), Value: label (if available)
 
             ## Read files and compute all scores
             for idx, line in enumerate(lines_eval):
@@ -341,65 +363,7 @@ class ModelTrainer(object):
                     enr = F.normalize(enr, p=2, dim=1)
                     tst = F.normalize(tst, p=2, dim=1)
 
-                # Choose scoring method based on configuration
-                use_samo_scoring = kwargs.get('use_samo_scoring', False)
-                debug_mode = kwargs.get('debug', False)
-                
-                if use_samo_scoring and hasattr(self.__model__.module.__L__, 'inference'):
-                    # Extract speaker ID for SAMO scoring
-                    # Prefer speaker ID from CSV (column 2) if available, otherwise extract from path
-                    speaker_id = None
-                    if len(data) >= 4:
-                        # CSV has speaker_id in column 2 (test set format)
-                        speaker_str = data[2]
-                    else:
-                        # Extract from enrollment path (validation format)
-                        enroll_path = data[0]
-                        if '/' in enroll_path:
-                            speaker_str = enroll_path.split('/')[1]  # e.g., "id10349"
-                        else:
-                            speaker_str = None
-                    
-                    # Convert speaker string to numeric ID
-                    if speaker_str:
-                        try:
-                            # Try to extract numeric part (e.g., "id10349" -> 10349 or "spk001" -> 1)
-                            speaker_id = int(''.join(filter(str.isdigit, speaker_str)))
-                        except:
-                            # If no digits, use the string itself if it's already numeric
-                            try:
-                                speaker_id = int(speaker_str)
-                            except:
-                                speaker_id = None
-                    
-                    if debug_mode:
-                        print(f"\n[DEBUG] Trial {idx+1}: SAMO scoring")
-                        print(f"  Enroll: {data[0][:60]}...")
-                        print(f"  Test: {data[1][:60]}...")
-                        print(f"  Speaker: {speaker_str} -> numeric_id={speaker_id}")
-                        print(f"  Enroll embed norm: {enr.norm():.4f}")
-                        print(f"  Test embed norm: {tst.norm():.4f}")
-                    
-                    score = self.__model__.module.__L__.inference(enr, tst, enroll_speaker=speaker_id)
-                    score = torch.tensor([score])  # Convert to tensor for consistency
-                    
-                    if debug_mode:
-                        print(f"  SAMO score: {score.item():.6f}")
-                else:
-                    # Default: cosine similarity
-                    score = F.cosine_similarity(enr, tst)
-                    
-                    if debug_mode:
-                        print(f"\n[DEBUG] Trial {idx+1}: Cosine similarity")
-                        print(f"  Enroll: {data[0][:60]}...")
-                        print(f"  Test: {data[1][:60]}...")
-                        print(f"  Score: {score.item():.6f}")
-
-                all_scores.append(score.detach().cpu().numpy())
-                
-                # Extract speaker ID and utterance ID
-                # If CSV has 4 columns: enroll_file,test_file,speaker_id,utt_id
-                # Otherwise extract from file paths
+                # Extract speaker ID and utterance ID first (needed for both methods)
                 if len(data) >= 4:
                     speaker_id = data[2]
                     test_utt = data[3]
@@ -410,15 +374,95 @@ class ModelTrainer(object):
                     speaker_id = enroll_path.split('/')[1] if '/' in enroll_path else enroll_path.split('_')[0]
                     test_utt = os.path.splitext(os.path.basename(test_path))[0]
                 
-                all_trials.append(f"{speaker_id}\t{test_utt}")  # Tab-separated for submission format
-                
-                if (len(data) == 3): #kwargs["eval"]):
-                    all_labels.append(data[2])
+                if use_samo_scoring and hasattr(self.__model__.module.__L__, 'inference'):
+                    # SAMO scoring: uses speaker-level attractors
+                    # Skip duplicate trials (same speaker+test with different enrollment files)
+                    trial_key = (speaker_id, test_utt)
+                    if trial_key in processed_trials:
+                        if debug_mode:
+                            print(f"\n[DEBUG] Trial {idx+1}: Skipping duplicate (already processed)")
+                            print(f"  Speaker: {speaker_id}, Test: {test_utt}")
+                        continue
+                    
+                    processed_trials.add(trial_key)
+                    speaker_str = speaker_id
+                    
+                    # Convert speaker string to numeric ID
+                    numeric_id = None
+                    if speaker_str:
+                        try:
+                            # Try to extract numeric part (e.g., "id10349" -> 10349 or "spk001" -> 1)
+                            numeric_id = int(''.join(filter(str.isdigit, speaker_str)))
+                        except:
+                            # If no digits, use the string itself if it's already numeric
+                            try:
+                                numeric_id = int(speaker_str)
+                            except:
+                                numeric_id = None
+                    
+                    if debug_mode:
+                        print(f"\n[DEBUG] Trial {idx+1}: SAMO scoring")
+                        print(f"  Enroll: {data[0][:60]}...")
+                        print(f"  Test: {data[1][:60]}...")
+                        print(f"  Speaker: {speaker_str} -> numeric_id={numeric_id}")
+                        print(f"  Test embed norm: {tst.norm():.4f}")
+                    
+                    # SAMO inference uses pre-built enrollment dictionary (already averaged)
+                    score = self.__model__.module.__L__.inference(enr, tst, enroll_speaker=numeric_id)
+                    score = torch.tensor([score])  # Convert to tensor for consistency
+                    
+                    if debug_mode:
+                        print(f"  SAMO score: {score.item():.6f}")
+                    
+                    # SAMO produces one score per speaker-test pair (enrollments already averaged)
+                    all_scores.append(score.detach().cpu().numpy())
+                    all_trials.append(f"{speaker_id}\t{test_utt}")
+                    
+                    if (len(data) == 3):
+                        all_labels.append(data[2])
+                else:
+                    # Cosine similarity: compute score for this enrollment-test pair
+                    score = F.cosine_similarity(enr, tst)
+                    
+                    if debug_mode:
+                        print(f"\n[DEBUG] Trial {idx+1}: Cosine similarity")
+                        print(f"  Enroll: {data[0][:60]}...")
+                        print(f"  Test: {data[1][:60]}...")
+                        print(f"  Speaker: {speaker_id}, Test: {test_utt}")
+                        print(f"  Score: {score.item():.6f}")
+                    
+                    # Accumulate scores for this test utterance (will average later)
+                    trial_key = (speaker_id, test_utt)
+                    trial_scores[trial_key].append(score.detach().cpu().numpy())
+                    
+                    # Store label if available (same for all enrollments of this test utterance)
+                    if (len(data) == 3) and trial_key not in trial_labels:
+                        trial_labels[trial_key] = data[2]
 
                 telapsed = time.time() - tstart
-
                 sys.stdout.write("\r Computing {:d} of {:d}: {:.2f} Hz      ".format(idx, len(lines_eval), idx/telapsed))
                 sys.stdout.flush()
+            
+            # For cosine similarity: average scores across multiple enrollments per test utterance
+            if not use_samo_scoring:
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                print(f"\n[{current_time}] Averaging scores across {len(trial_scores)} unique test utterances...")
+                for trial_key in sorted(trial_scores.keys()):
+                    speaker_id, test_utt = trial_key
+                    scores = trial_scores[trial_key]
+                    avg_score = sum(scores) / len(scores)  # Average across enrollment files
+                    
+                    if debug_mode and len(scores) > 1:
+                        print(f"  {speaker_id}\t{test_utt}: {len(scores)} enrollments, scores={[f'{s[0]:.4f}' for s in scores]}, avg={avg_score[0]:.4f}")
+                    
+                    all_scores.append(avg_score)
+                    all_trials.append(f"{speaker_id}\t{test_utt}")
+                    
+                    if trial_key in trial_labels:
+                        all_labels.append(trial_labels[trial_key])
+                
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                print(f"[{current_time}] Finished averaging. Final trial count: {len(all_scores)}")
 
         if (kwargs["scoring"]):
             return all_scores, all_trials

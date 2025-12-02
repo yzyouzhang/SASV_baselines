@@ -243,46 +243,37 @@ class SAMO_SASV(nn.Module):
     def inference(self, enroll_embed, test_embed, enroll_speaker=None):
         """
         SAMO-based scoring for evaluation/testing.
-        Computes SAMO similarity scores between enrollment and test embeddings.
+        Uses SAMO inference which returns cosine similarity to enrollment (if available)
+        or max similarity to SAMO centers (if enrollment not available).
         
         Args:
-            enroll_embed: Enrollment embedding [1, D]
+            enroll_embed: Enrollment embedding [1, D] (passed but may not be used if dict available)
             test_embed: Test embedding [1, D]
-            enroll_speaker: Speaker ID (int) for speaker-aware scoring (optional)
+            enroll_speaker: Speaker ID (int) for speaker-aware scoring with enrollment dict
             
         Returns:
-            score: Similarity score (higher = more likely bonafide)
+            score: Similarity score in range [-1, 1] (higher = more bonafide/same speaker)
         """
-        # Use SAMO inference for test embedding
+        # Use SAMO inference on test embedding
         attractor_mode = 0
         spk_list = None
         
         if self.use_speaker_attractor and enroll_speaker is not None and self.enroll_dict is not None:
-            # Use speaker-aware attractor
+            # Use speaker-aware attractor from enrollment dictionary
             spk_list = [enroll_speaker]
             attractor_mode = 1
         
-        # Get SAMO score for test embedding
-        test_score = self.samo.inference(
+        # SAMO inference returns:
+        # - If attractor=1 and enrollment exists: cosine similarity between test and enrollment
+        # - Otherwise: max cosine similarity to SAMO centers
+        score = self.samo.inference(
             test_embed,
             spk=spk_list,
             enroll=self.enroll_dict,
             attractor=attractor_mode
         )
         
-        # Also get score for enrollment (should be high if bonafide)
-        enroll_score = self.samo.inference(
-            enroll_embed,
-            spk=spk_list,
-            enroll=self.enroll_dict,
-            attractor=attractor_mode
-        )
-        
-        # Combine scores: average of enrollment and test scores
-        # This gives a measure of how "bonafide-like" both embeddings are
-        combined_score = (enroll_score + test_score) / 2.0
-        
-        return combined_score.item()
+        return score.item()
 
 
 # Alias for compatibility with training script

@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64g
-#SBATCH --time=8:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=slurm_outputs/slurm-%j.out
 #SBATCH --error=slurm_outputs/slurm-%j.err
 
@@ -22,7 +22,7 @@ conda activate wildspoof_sasv
 
 # Configuration
 INITIAL_MODEL="exp/sasv_redimnet/model/model000000008.model"  # Your best pretrained model
-SAVE_PATH="exp/sasv_samo_finetune"
+SAVE_PATH="exp/sasv_samo_finetune2"
 
 # Training data
 TRAIN_LIST="corpus/spoofceleb/metadata/train.csv"
