@@ -86,6 +86,7 @@ parser.add_argument('--rir_path',       type=str,   default="",     help='Absolu
 ## TSV protocol files for scoring mode
 parser.add_argument('--enroll_tsv',     type=str,   default="",     help='Enrollment TSV file (format: speaker_id enroll_file1,enroll_file2,...)')
 parser.add_argument('--test_tsv',       type=str,   default="",     help='Test TSV file (format: speaker_id test_file)')
+parser.add_argument('--enroll_path',    type=str,   default="",     help='Path to enrollment audio files (if different from eval_path)')
 
 ## Model definition
 parser.add_argument('--num_mels',       type=int,   default=80,     help='Number of mel filterbanks')

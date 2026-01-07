@@ -477,16 +477,20 @@ class ModelTrainer(object):
         Args:
             enroll_tsv: Path to enrollment TSV (format: speaker_id enroll_file1,enroll_file2,...)
             test_tsv: Path to test TSV (format: speaker_id test_file)
-            eval_path: Base path to audio files
+            eval_path: Base path to test audio files
             num_thread: Number of data loader threads
             eval_frames: Number of frames for evaluation (0 = full file)
             num_eval: Number of segments per utterance
+            enroll_path: (optional) Separate base path for enrollment audio files. If not provided, uses eval_path
         
         Returns:
             (scores, trials) tuple where trials are formatted as "speaker_id\tutt_id"
         """
         rank = 0
         self.__model__.eval()
+        
+        # Get separate enrollment path if provided
+        enroll_path = kwargs.get('enroll_path', eval_path)
         
         tstart = time.time()
         
@@ -539,25 +543,56 @@ class ModelTrainer(object):
         print(f"Loaded {len(test_trials)} test trials")
         print("="*70 + "\n")
         
-        # Step 3: Collect all unique files (enrollments + test files)
-        all_files = set()
-        for enroll_files in speaker_enrollments.values():
-            all_files.update(enroll_files)
+        # Step 3: Separate enrollment and test files
+        enroll_files = set()
+        test_files = set()
+        
+        for enroll_list in speaker_enrollments.values():
+            enroll_files.update(enroll_list)
         for _, test_file in test_trials:
-            all_files.add(test_file)
+            test_files.add(test_file)
         
-        all_files = sorted(list(all_files))
+        enroll_files = sorted(list(enroll_files))
+        test_files = sorted(list(test_files))
         
-        # Step 4: Extract embeddings for all files
+        print(f"Total enrollment files: {len(enroll_files)}")
+        print(f"Total test files: {len(test_files)}")
+        
+        # Step 4: Extract embeddings for enrollment files
         from DatasetLoader import test_dataset_loader
-        test_dataset = test_dataset_loader(all_files, eval_path, eval_frames=eval_frames, num_eval=num_eval, **kwargs)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, 
-                                                   num_workers=num_thread, drop_last=False, sampler=None)
-        
         embeddings = {}
+        
         if rank == 0:
             current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            print(f"[{current_time}] Extracting embeddings for {len(all_files)} files...")
+            print(f"[{current_time}] Extracting enrollment embeddings from {enroll_path}...")
+        
+        enroll_dataset = test_dataset_loader(enroll_files, enroll_path, eval_frames=eval_frames, num_eval=num_eval, **kwargs)
+        enroll_loader = torch.utils.data.DataLoader(enroll_dataset, batch_size=1, shuffle=False, 
+                                                     num_workers=num_thread, drop_last=False, sampler=None)
+        
+        for idx, data in enumerate(enroll_loader):
+            inp1 = data[0][0].cuda()
+            with torch.no_grad():
+                ref_embed = self.__model__(inp1).detach().cpu()
+            embeddings[data[1][0]] = ref_embed
+            
+            telapsed = time.time() - tstart
+            if rank == 0:
+                sys.stdout.write("\r Reading enrollment {:d} of {:d}: {:.2f} Hz      ".format(
+                    idx+1, len(enroll_files), (idx+1)/telapsed))
+                sys.stdout.flush()
+        
+        if rank == 0:
+            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}] Finished extracting enrollment embeddings")
+        
+        # Step 5: Extract embeddings for test files
+        if rank == 0:
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            print(f"[{current_time}] Extracting test embeddings from {eval_path}...")
+        
+        test_dataset = test_dataset_loader(test_files, eval_path, eval_frames=eval_frames, num_eval=num_eval, **kwargs)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, 
+                                                   num_workers=num_thread, drop_last=False, sampler=None)
         
         for idx, data in enumerate(test_loader):
             inp1 = data[0][0].cuda()
@@ -567,13 +602,13 @@ class ModelTrainer(object):
             
             telapsed = time.time() - tstart
             if rank == 0:
-                sys.stdout.write("\r Reading {:d} of {:d}: {:.2f} Hz, embedding size {:d}      ".format(
-                    idx+1, len(all_files), (idx+1)/telapsed, ref_embed.size()[1]))
+                sys.stdout.write("\r Reading test {:d} of {:d}: {:.2f} Hz      ".format(
+                    idx+1, len(test_files), (idx+1)/telapsed))
                 sys.stdout.flush()
         
         if rank == 0:
             current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            print(f"\n[{current_time}] Finished extracting embeddings")
+            print(f"\n[{current_time}] Finished extracting test embeddings")
         
         # Step 5: Build speaker-level enrollment embeddings (average across enrollment files)
         print("\nBuilding speaker-level enrollment embeddings...")
